@@ -108,14 +108,24 @@ The script also pins each channel's link until its token is close to expiring
 (`cache_digiturk/`). Without that, every manifest refresh asks Digiturk for a
 new link, gets a different CDN server each time, and the channel restarts.
 
-## Only if you need the helper (`use_cdn_proxy: true`)
+## Running the helper (needed for the sports channels)
 
-Run it once, in the background, before starting channels:
+Start it before the channels, and leave it running:
 
     python digiturk_cdn.py
 
-It forwards playlists through the tunnel and rewrites them so the video segments
-still come straight from the CDN. It listens on `127.0.0.1:9192`.
+On Windows it stays in the console window — keep that window open. On Linux it
+goes to the background by itself (use `--foreground` if you'd rather watch it).
+It listens on `127.0.0.1:9192`.
 
-In O11, those sports channels then need, per stream:
-Manifest network = none (no proxy), Media network = proxy (your tunnel).
+Proof it is needed: with the original link, O11 logs
+
+    HTTP Get error [Get "beinsports01_int-audio_tur=128000-video=6000000-465765776.ts":
+    unsupported protocol scheme ""]
+
+because the playlist names its segments without an address and O11 will not
+build one.
+
+**After changing any of this, delete the channel in O11 and add it again.**
+Editing is not enough — O11 stores the last address it was given and keeps
+reusing it, so a channel can keep failing on a link you already replaced.

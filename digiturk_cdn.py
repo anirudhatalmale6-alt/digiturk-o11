@@ -262,23 +262,47 @@ def run():
     srv.serve_forever()
 
 
+def tmp_path(name):
+    """Windows has no /tmp - keep the pid/log next to this script there."""
+    if os.name == "nt":
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+    return "/tmp/" + name
+
+
+PID_FILE = tmp_path("digiturk_cdn.pid")
+LOG_FILE = tmp_path("digiturk_cdn.log")
+
+
 if __name__ == '__main__':
+    # stop a previous copy if one is still listening
     try:
-        with open('/tmp/digiturk_cdn.pid') as f:
+        with open(PID_FILE) as f:
             os.kill(int(f.read().strip()), signal.SIGTERM)
-        import time
         time.sleep(1)
     except Exception:
         pass
+
+    # Windows (and "--foreground") just run in this console: os.fork does not
+    # exist there. Leave the window open while you are watching.
+    if os.name == "nt" or "--foreground" in sys.argv or not hasattr(os, "fork"):
+        try:
+            with open(PID_FILE, 'w') as f:
+                f.write(str(os.getpid()))
+        except Exception:
+            pass
+        print("running in foreground - keep this window open")
+        run()
+        sys.exit(0)
+
     if os.fork() > 0:
         sys.exit(0)
     os.setsid()
     if os.fork() > 0:
         sys.exit(0)
     sys.stdin = open(os.devnull, 'r')
-    sys.stdout = open('/tmp/digiturk_cdn.log', 'a')
+    sys.stdout = open(LOG_FILE, 'a')
     sys.stderr = sys.stdout
-    with open('/tmp/digiturk_cdn.pid', 'w') as f:
+    with open(PID_FILE, 'w') as f:
         f.write(str(os.getpid()))
     signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
     run()
