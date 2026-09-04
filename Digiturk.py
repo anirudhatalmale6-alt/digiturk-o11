@@ -103,6 +103,9 @@ if not proxy:
 # install in a country Digiturk serves, set "use_cdn_proxy": false and every
 # channel is handed the original CDN link.
 USE_CDN_PROXY = bool(config.get('use_cdn_proxy', True))
+# When not using the local helper, resolve the HLS master here and give O11 the
+# variant playlist directly (see pick_best_variant).
+RESOLVE_HLS_VARIANT = bool(config.get('resolve_hls_variant', True))
 CDN_PROXY_PORT = int(config.get('cdn_proxy_port', CDN_PROXY_PORT))
 
 proxies = {'http': proxy, 'https': proxy} if proxy else None
@@ -264,6 +267,45 @@ def reauth():
     return tok
 
 
+def pick_best_variant(master_url):
+    """Fetch an HLS master playlist and return the highest-bandwidth variant url.
+
+    Digiturk puts its Akamai session token in the PATH, and the token contains a
+    slash (acl=/*). When O11 has to resolve a child playlist from a master it
+    builds a local filename out of that path and the write fails:
+        open .../manifests/digiturk/hdntl=iat=...~acl=/*~id=... : no such file
+    Handing it the variant directly removes that step.
+    """
+    r = session.get(master_url, headers={'user-agent': USER_AGENT}, timeout=25)
+    if r.status_code != 200 or "#EXTM3U" not in r.text[:64]:
+        return ""
+    base = master_url.split("?", 1)[0].rsplit("/", 1)[0]
+    query = ("?" + master_url.split("?", 1)[1]) if "?" in master_url else ""
+    best_bw, best_url = -1, ""
+    lines = r.text.splitlines()
+    for i, line in enumerate(lines):
+        if not line.startswith("#EXT-X-STREAM-INF"):
+            continue
+        m = re.search(r"BANDWIDTH=(\d+)", line)
+        bw = int(m.group(1)) if m else 0
+        for nxt in lines[i + 1:]:
+            nxt = nxt.strip()
+            if not nxt or nxt.startswith("#"):
+                continue
+            if not nxt.startswith("http"):
+                nxt = base + "/" + nxt
+            # Do NOT append the master's query when the variant path already
+            # carries the token. That query contains a slash (acl=/*), so any
+            # consumer resolving the segment names against this url would split
+            # its "directory" inside the query and every segment would 404.
+            if "?" not in nxt and "hdntl=" not in nxt:
+                nxt += query
+            if bw > best_bw:
+                best_bw, best_url = bw, nxt
+            break
+    return best_url
+
+
 def cache_path(slug):
     d = os.path.join(script_dir(), "cache_digiturk")
     try:
@@ -421,6 +463,20 @@ def do_action():
         is_hls = (str(data.get('streamFormatType')) == '3'
                   or url.split('?')[0].endswith('.m3u8'))
         out_url = url
+
+        # Preferred fix when this machine can reach the CDN itself: resolve the
+        # master playlist here and hand O11 the chosen VARIANT url directly.
+        # O11 then never has to follow a child playlist reference, which is the
+        # step that breaks on Digiturk's token path.
+        if is_hls and not USE_CDN_PROXY and RESOLVE_HLS_VARIANT:
+            try:
+                variant = pick_best_variant(url)
+                if variant:
+                    out_url = variant
+                    print("resolved variant playlist", file=sys.stderr)
+            except Exception as e:
+                print(f"variant resolve failed ({e}), using master", file=sys.stderr)
+
         if is_hls and USE_CDN_PROXY:
             if url.startswith("https://"):
                 out_url = f"http://127.0.0.1:{CDN_PROXY_PORT}/r/" + url[len("https://"):]

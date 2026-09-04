@@ -56,12 +56,35 @@ it**. So whatever fetches the video afterwards must come from that same IP.
 
 ### `use_cdn_proxy`
 
-* `false` — every channel gets the **original** CDN link
-  (`https://dt-live-int-bytpls.dtvcdns.com/...`). Use this whenever this machine
-  can play the sports channels itself. This is the setup you want at home.
-* `true` — the sports/HLS channels are routed through the local helper
-  (`digiturk_cdn.py`, port 9192). Only needed on a machine whose own IP is
-  refused by the sports CDN.
+Leave this **`true`**. The normal channels always get the original CDN link; the
+setting only affects the sports (HLS) ones, and those need the helper on *any*
+machine — see below.
+
+### `cdn_proxy_upstream`
+
+Where the helper fetches the CDN from. Empty (`""`) means straight out from this
+machine — correct when this machine can reach the CDN itself. Set it to a tunnel
+(e.g. `"http://127.0.0.1:8888"`) only on a server whose own IP the sports CDN
+refuses.
+
+## Why the sports channels need the helper (even with the original domain)
+
+It is not about IP or geo blocking. O11 **does not resolve relative URLs inside
+an HLS playlist**. Digiturk's sports playlists list their segments by bare
+filename:
+
+    beinsports01_int-audio_tur=128000-video=6000000-465765210.ts
+
+O11 passes that straight to its HTTP client and fails with
+`unsupported protocol scheme ""`. Digiturk also puts its access token in the URL
+*path*, and the token contains a slash (`acl=/*`), which breaks the filename O11
+derives when it saves a manifest.
+
+The helper solves both: it serves the playlists and rewrites the segment lines
+into absolute `https://…dtvcdns.com/…` URLs. **The video itself never goes
+through the helper** — O11 downloads the segments straight from the CDN, so the
+helper stays at ~1-3% CPU. Sending the video through it is what causes
+`Slow: N` and freezing.
 
 ## Channels
 

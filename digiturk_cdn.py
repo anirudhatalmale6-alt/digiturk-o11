@@ -14,6 +14,7 @@ HLS playlists so child URLs keep coming back here.
 Completely separate from cdn_serial_proxy.py (9191, used by the live channels).
 """
 import http.server
+import json
 import urllib.request
 import urllib.parse
 import ssl
@@ -25,7 +26,24 @@ import signal
 import re
 
 PORT = 9192
-TUNNEL = "http://127.0.0.1:8888"
+
+# Upstream proxy for reaching the CDN. Read from config_digiturk.json:
+#   "cdn_proxy_upstream": "http://127.0.0.1:8888"  -> go out through that tunnel
+#   "cdn_proxy_upstream": ""                       -> go out directly
+# Falls back to "proxy", so a server that tunnels everything keeps working.
+def _load_upstream():
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "config_digiturk.json")) as f:
+            c = json.load(f)
+        if "cdn_proxy_upstream" in c:
+            return c.get("cdn_proxy_upstream") or ""
+        return c.get("proxy") or ""
+    except Exception:
+        return ""
+
+
+TUNNEL = _load_upstream()
 LOCK = threading.Semaphore(16)
 
 ssl_ctx = ssl.create_default_context()
@@ -37,9 +55,10 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 
 def build_opener():
+    handler = (urllib.request.ProxyHandler({'http': TUNNEL, 'https': TUNNEL})
+               if TUNNEL else urllib.request.ProxyHandler({}))
     return urllib.request.build_opener(
-        urllib.request.ProxyHandler({'http': TUNNEL, 'https': TUNNEL}),
-        urllib.request.HTTPSHandler(context=ssl_ctx))
+        handler, urllib.request.HTTPSHandler(context=ssl_ctx))
 
 
 def is_playlist(url):
@@ -238,7 +257,7 @@ class ThreadedServer(http.server.ThreadingHTTPServer):
 
 def run():
     srv = ThreadedServer(('127.0.0.1', PORT), Proxy)
-    print("digiturk CDN proxy on 127.0.0.1:%d" % PORT)
+    print("digiturk CDN proxy on 127.0.0.1:%d (upstream=%s)" % (PORT, TUNNEL or "direct"))
     sys.stdout.flush()
     srv.serve_forever()
 

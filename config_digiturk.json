@@ -2,5 +2,6 @@
   "username": "YOUR_DIGITURK_EMAIL",
   "password": "YOUR_DIGITURK_PASSWORD",
   "proxy": "",
-  "use_cdn_proxy": false
+  "cdn_proxy_upstream": "",
+  "use_cdn_proxy": true
 }
