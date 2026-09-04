@@ -14,6 +14,7 @@ HLS playlists so child URLs keep coming back here.
 Completely separate from cdn_serial_proxy.py (9191, used by the live channels).
 """
 import http.server
+import gzip
 import json
 import urllib.request
 import urllib.parse
@@ -235,11 +236,19 @@ class Proxy(http.server.BaseHTTPRequestHandler):
             self.wfile.write(cached)
             return
 
-        req = urllib.request.Request(real, headers={"User-Agent": UA})
+        # Ask for gzip. Digiturk's live media playlist is a ~12 hour DVR window:
+        # 934 KB of text that we re-fetch every manifestUpdatePeriod, per sports
+        # channel. Measured through the North Macedonia tunnel it is 934,052 B
+        # and 2.7-6.7 s uncompressed against 32,095 B and 2.4-2.9 s gzipped -
+        # 29x fewer bytes competing with the video segments on the same tunnel.
+        req = urllib.request.Request(real, headers={"User-Agent": UA,
+                                                    "Accept-Encoding": "gzip"})
         LOCK.acquire()
         try:
             resp = build_opener().open(req, timeout=30)
             data = resp.read()
+            if (resp.headers.get('Content-Encoding') or '').lower() == 'gzip':
+                data = gzip.decompress(data)
             ct = resp.headers.get('Content-Type', 'application/octet-stream')
             final = resp.geturl()  # after any redirects (still via tunnel)
 
