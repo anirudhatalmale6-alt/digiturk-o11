@@ -73,6 +73,8 @@ def is_playlist(url):
 # restarting the channel. Serving the same rewritten master for a short window
 # keeps one variant url alive so the live playlist simply advances.
 # Only MASTER playlists are cached - the media playlist must stay live.
+# how many segments of the live edge to hand O11 (see trim_media_playlist)
+KEEP_SEGMENTS = 20
 MASTER_TTL = 60
 _master_cache = {}
 _master_lock = threading.Lock()
@@ -124,6 +126,59 @@ def rewrite_hls(text, proxy_host_base, cdn_dir):
         else:
             out.append(to_origin(s, proxy_host_base, cdn_dir))
     return "\n".join(out)
+
+
+def trim_media_playlist(text, keep=KEEP_SEGMENTS):
+    """Cut a live media playlist down to the last `keep` segments.
+
+    Digiturk publishes a ~12 hour DVR window: 11250 segments, and once the
+    segment lines are absolute urls that is a 3.5 MB playlist. O11 re-downloads
+    the whole thing every manifestUpdatePeriod (3.84s), which is ~7.5 Mbit/s of
+    text on its own - the download then takes longer than the period, O11 falls
+    behind and the picture breaks up after a few minutes.
+
+    A live player only needs the live edge, so keep the tail and renumber
+    EXT-X-MEDIA-SEQUENCE by however many segments were dropped.
+    """
+    lines = text.split("\n")
+    # split header (everything before the first segment) from the segment body
+    first = None
+    for i, l in enumerate(lines):
+        if l.startswith("#EXTINF"):
+            first = i
+            break
+    if first is None:
+        return text                      # master playlist, or nothing to trim
+
+    header = lines[:first]
+    body = lines[first:]
+
+    # group the body into (tags..., url) records, one per segment
+    records, cur = [], []
+    for l in body:
+        s = l.strip()
+        if not s:
+            continue
+        cur.append(l)
+        if not s.startswith("#"):
+            records.append(cur)
+            cur = []
+    if not records or len(records) <= keep:
+        return text
+
+    dropped = len(records) - keep
+    kept = records[-keep:]
+
+    out = []
+    for l in header:
+        m = re.match(r"\s*#EXT-X-MEDIA-SEQUENCE:(\d+)", l)
+        if m:
+            out.append("#EXT-X-MEDIA-SEQUENCE:%d" % (int(m.group(1)) + dropped))
+        else:
+            out.append(l)
+    for rec in kept:
+        out.extend(rec)
+    return "\n".join(out) + "\n"
 
 
 def to_origin(url, host, cdn_dir):
@@ -195,11 +250,14 @@ class Proxy(http.server.BaseHTTPRequestHandler):
                 fhost = fu.netloc
                 fdir = fu.path.rsplit("/", 1)[0] + "/"
                 text = data.decode('utf-8', errors='replace')
-                data = rewrite_hls(text, fhost, fdir).encode('utf-8')
-                ct = 'application/vnd.apple.mpegurl'
                 # a MASTER lists other playlists; a media playlist lists segments
                 is_master = any(is_playlist(l.strip()) for l in text.split("\n")
                                 if l.strip() and not l.startswith("#"))
+                rewritten = rewrite_hls(text, fhost, fdir)
+                if not is_master:
+                    rewritten = trim_media_playlist(rewritten)
+                data = rewritten.encode('utf-8')
+                ct = 'application/vnd.apple.mpegurl'
                 if is_master:
                     master_cache_put(real.split("?")[0], data, ct)
 

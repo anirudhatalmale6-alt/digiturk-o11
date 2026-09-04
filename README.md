@@ -92,6 +92,29 @@ helper stays at ~1-3% CPU. Sending the video through it is what causes
 * The sports feeds (beIN SPORTS 1 / 2 / 90+1 / MAX 2, TRT Spor) are HLS.
 * `Show TV` is not part of this package and will always fail — that is normal.
 
+## If the picture breaks up after a few minutes
+
+Digiturk publishes a ~12 hour DVR window on the sports channels: the playlist
+lists about **11,250 segments**. O11 re-downloads that whole playlist every
+`manifestUpdatePeriod` (3.84s). Once the segment lines are full addresses that
+is a 3.5 MB file every 3.84 seconds — roughly 7.5 Mbit/s of *text*, before any
+video. The download then takes longer than the period, O11 falls behind, and
+the picture breaks up after a few minutes.
+
+The helper trims the playlist to the last `KEEP_SEGMENTS` (20) segments and
+renumbers `EXT-X-MEDIA-SEQUENCE`. Measured on beIN SPORTS 1:
+
+    before   3,589,052 bytes   11,250 segments
+    after         6,682 bytes       20 segments
+
+A live channel only needs the live edge, so nothing is lost. After this,
+beIN SPORTS 1 ran 10 minutes at full 1080p50 with zero slow-fragment warnings.
+The tell-tale log line is:
+
+    took 5.14 to download a 3589052 bytes fragments (manifestUpdatePeriod=3.84s)
+
+If "took X" is larger than the update period, the source side cannot keep up.
+
 ## If a channel keeps restarting
 
 O11 restarts a channel when the playlist jumps too far ahead ("too many new
