@@ -306,6 +306,46 @@ def pick_best_variant(master_url):
     return best_url
 
 
+def blackout_target(url):
+    """Return the slate url when Digiturk is blacking this channel out.
+
+    When a programme has no international rights Digiturk keeps answering the
+    live url, but with a 302 to a VOD asset:
+        dt-live-int.akamaized.net/int/beinsports02/... -> dt-vod.akamaized.net/bo/int.ism/...
+    What comes back is one 238 kbps variant, five 6 s segments and an
+    EXT-X-ENDLIST - a 30 second card that says the content is not licensed
+    abroad. It is not a live feed, so O11 reaches the end of the playlist and
+    restarts the channel about once a minute, and the picture looks destroyed
+    because 221 kbps is being stretched to 720p.
+
+    Nothing on this side can improve that. The point of detecting it is to say
+    so in one line instead of spending an evening looking for a bug that is not
+    here. Digiturk's own card says the channel comes back by itself when the
+    restricted programme ends.
+    """
+    try:
+        r = session.get(url, headers={'user-agent': USER_AGENT}, timeout=20,
+                        allow_redirects=False)
+    except Exception:
+        return ""
+    if not (300 <= r.status_code < 400):
+        return ""
+    loc = r.headers.get('location', '') or ''
+    return loc if ("/bo/" in loc or "dt-vod" in loc) else ""
+
+
+def note_blackout(slug, loc):
+    """Record a blackout where both a human and a watcher can see it."""
+    short = loc.split('?')[0]
+    print(f"{slug}: BLACKED OUT by Digiturk (no international rights for the "
+          f"current programme) -> {short}", file=sys.stderr)
+    try:
+        with open(os.path.join(script_dir(), "digiturk_blackout.log"), 'a') as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {slug} -> {short}\n")
+    except Exception:
+        pass
+
+
 def cache_path(slug):
     d = os.path.join(script_dir(), "cache_digiturk")
     try:
@@ -440,6 +480,17 @@ def do_action():
 
         print(f"drmType={data.get('streamDrmType')} format={data.get('streamFormatType')} "
               f"cdn={data.get('cdnProvider')}", file=sys.stderr)
+
+        # Only on a FRESH play url. A pinned url is reused on every manifest
+        # refresh (every few seconds) and one extra request per refresh is not
+        # worth it; a blackout starts with a new programme, not mid-token.
+        if not data.get('cached'):
+            try:
+                loc = blackout_target(url)
+                if loc:
+                    note_blackout(id, loc)
+            except Exception as e:
+                print(f"blackout check skipped ({e})", file=sys.stderr)
 
         # DASH (the large majority of channels): hand O11 the ORIGINAL CDN url,
         # same as the Magenta MK provider. The tunnel is applied at the network
