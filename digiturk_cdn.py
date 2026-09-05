@@ -75,7 +75,7 @@ def is_playlist(url):
 # keeps one variant url alive so the live playlist simply advances.
 # Only MASTER playlists are cached - the media playlist must stay live.
 # how many segments of the live edge to hand O11 (see trim_media_playlist)
-KEEP_SEGMENTS = 20
+KEEP_SEGMENTS = 240
 MASTER_TTL = 60
 _master_cache = {}
 _master_lock = threading.Lock()
@@ -140,6 +140,23 @@ def trim_media_playlist(text, keep=KEEP_SEGMENTS):
 
     A live player only needs the live edge, so keep the tail and renumber
     EXT-X-MEDIA-SEQUENCE by however many segments were dropped.
+
+    How many to keep is not a size choice, it is O11's catch-up budget. If O11
+    stalls and the fragment it is still working on has already scrolled out of
+    what we hand it, it cannot go back - it skips forward and the picture breaks
+    up, permanently, because it stays behind. Only a restart resyncs it to the
+    live edge. That is exactly what the first version of this did: 20 segments
+    is 77 seconds, and a two minute CDN stall on 2026-09-05 reinit'd every
+    sports channel on both servers at once:
+
+        could not find previous video fragment (ts=465779358) ... reinit
+        manifest last 20 frags: /465779376, ... /465779394
+
+    (wanted 465779358, oldest left 465779376 - 18 behind, window holds 20.)
+
+    240 segments is ~15 minutes of room. It costs nothing upstream: the full
+    DVR window is fetched and gunzipped either way, so this only decides how
+    much of it goes to O11 over loopback - 77 KB, served in ~0.1 s.
     """
     lines = text.split("\n")
     # split header (everything before the first segment) from the segment body
